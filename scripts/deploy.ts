@@ -7,10 +7,8 @@ async function main() {
     const from = await provider.getSigner().getAddress();
 
     console.log("from:", from);
-    const factory = await ethers.getContractFactory("Nftry");
-    const usdc = "0x9758211252cE46EEe6d9685F2402B7DdcBb2466d";
-
-    const ret = await factory.deploy(usdc);
+    const factory = await ethers.getContractFactory("NFTRY");
+    const ret = await factory.deploy();
 
     console.log("contract addr:", ret.address);
   } catch (e) {
