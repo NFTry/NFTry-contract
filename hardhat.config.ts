@@ -6,7 +6,6 @@ import "@nomiclabs/hardhat-waffle";
 import { config as dotenvConfig } from "dotenv";
 import { resolve } from "path";
 
-
 dotenvConfig({ path: resolve(__dirname, "./.env") });
 
 const privateKey: string | undefined = process.env.PRIVATE_KEY;
@@ -32,7 +31,12 @@ const config: HardhatUserConfig = {
       accounts: [privateKey],
     },
   },
+  paths: {
+    sources: "./contracts",
+    tests: "./test",
+    cache: "./cache",
+    artifacts: "./artifacts",
+  },
 };
 
 export default config;
-
