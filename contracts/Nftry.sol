@@ -141,7 +141,7 @@ contract NFTRY {
         listing.unclaimedFixedFees = 0;
     }
 
-    function claimUsageFee(address nftAddress, uint tokenId) internal {
+    function _claimUsageFee(address nftAddress, uint tokenId) internal {
         Listing storage listing = listings[nftAddress][tokenId];
         if (listing.borrower != address(0)) {
             uint unclaimedUsageFees = ((block.timestamp - listing.lastClaim) *
