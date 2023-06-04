@@ -125,6 +125,7 @@ contract NFTRY {
         IERC721A(nftAddress).transferFrom(msg.sender, address(this), tokenId);
         Listing storage listing = listings[nftAddress][tokenId];
         _resetListing(listing);
+        listing.owner = msg.sender;
         listing.deposit = deposit;
         listing.fixedFee = fixedFee;
         listing.usageFee = usageFee;
