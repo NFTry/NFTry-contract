@@ -22,7 +22,7 @@ contract NFTRY {
     struct BorrowableNFT {
         address nftAddress;
         uint tokenId;
-        uint depositFee;
+        uint deposit;
         uint fixedFee;
         uint usageFee;
     }
@@ -30,7 +30,7 @@ contract NFTRY {
     struct BorrowedNFT {
         address nftAddress;
         uint tokenId;
-        uint depositFee;
+        uint deposit;
         uint fixedFee;
         uint usageFee;
         address borrowedFrom;
@@ -40,7 +40,7 @@ contract NFTRY {
     struct LentNFT {
         address nftAddress;
         uint tokenId;
-        uint depositFee;
+        uint deposit;
         uint fixedFee;
         uint usageFee;
         address borrowedBy;
@@ -124,7 +124,7 @@ contract NFTRY {
 
         IERC721A(nftAddress).transferFrom(msg.sender, address(this), tokenId);
         Listing storage listing = listings[nftAddress][tokenId];
-        resetListing(listing);
+        _resetListing(listing);
         listing.deposit = deposit;
         listing.fixedFee = fixedFee;
         listing.usageFee = usageFee;
@@ -151,7 +151,7 @@ contract NFTRY {
 
         claim(nftAddress, tokenId);
 
-        resetListing(listing);
+        _resetListing(listing);
 
         // Remove the tokenId from the lender's list.
         uint[] storage lenderTokens = allLenders[msg.sender];
@@ -184,8 +184,8 @@ contract NFTRY {
     function claim(address nftAddress, uint tokenId) public {
         Listing storage listing = listings[nftAddress][tokenId];
         require(listing.owner == msg.sender, "Only Owner can claim");
-        if (listing.unclaimedFixedFees > 0) claimFixedFee(nftAddress, tokenId);
-        claimUsageFee(nftAddress, tokenId);
+        if (listing.unclaimedFixedFees > 0) _claimFixedFee(nftAddress, tokenId);
+        _claimUsageFee(nftAddress, tokenId);
     }
 
     function _claimFixedFee(address nftAddress, uint tokenId) internal {
@@ -333,11 +333,11 @@ contract NFTRY {
         uint count = 0;
         for (uint i = 0; i < allTokens[nftAddress].length; i++) {
             uint tokenId = allTokens[nftAddress][i];
-            if (!listings[nftAddress][tokenId].inUse) {
+            if (listings[nftAddress][tokenId].borrower == address(0)) {
                 borrowableNFTs[count] = BorrowableNFT(
                     nftAddress,
                     tokenId,
-                    listings[nftAddress][tokenId].depositFee,
+                    listings[nftAddress][tokenId].deposit,
                     listings[nftAddress][tokenId].fixedFee,
                     listings[nftAddress][tokenId].usageFee
                 );
@@ -364,11 +364,13 @@ contract NFTRY {
             uint tokenId = allBorrowers[borrower][i];
             address nftAddress = borrowerToNftAddress[borrower][tokenId];
             Listing memory listing = listings[nftAddress][tokenId];
-            if (listing.inUse && listing.borrower == borrower) {
+            if (
+                listing.borrower != address(0) && listing.borrower == borrower
+            ) {
                 borrowedNFTs[count] = BorrowedNFT(
                     nftAddress,
                     tokenId,
-                    listing.depositFee,
+                    listing.deposit,
                     listing.fixedFee,
                     listing.usageFee,
                     listing.owner,
@@ -394,11 +396,11 @@ contract NFTRY {
             uint tokenId = allLenders[lender][i];
             address nftAddress = lenderToNftAddress[lender][tokenId];
             Listing memory listing = listings[nftAddress][tokenId];
-            if (listing.inUse && listing.owner == lender) {
+            if (listing.borrower != address(0) && listing.owner == lender) {
                 lentNFTs[count] = LentNFT(
                     nftAddress,
                     tokenId,
-                    listing.depositFee,
+                    listing.deposit,
                     listing.fixedFee,
                     listing.usageFee,
                     listing.borrower,
