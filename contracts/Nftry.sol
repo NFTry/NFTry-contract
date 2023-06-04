@@ -109,7 +109,7 @@ contract NFTRY {
         emit NftDelisted(nftAddress, tokenId, msg.sender);
     }
 
-    function resetListing(Listing storage listing) internal {
+    function _resetListing(Listing storage listing) internal {
         listing.owner = address(0);
         listing.deposit = 0;
         listing.fixedFee = 0;
