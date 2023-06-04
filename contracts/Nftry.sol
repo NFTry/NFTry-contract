@@ -129,7 +129,7 @@ contract NFTRY {
         claimUsageFee(nftAddress, tokenId);
     }
 
-    function claimFixedFee(address nftAddress, uint tokenId) internal {
+    function _claimFixedFee(address nftAddress, uint tokenId) internal {
         Listing storage listing = listings[nftAddress][tokenId];
         ERC20(USDC).transfer(msg.sender, listing.unclaimedFixedFees);
         emit FixedFeeClaimed(
