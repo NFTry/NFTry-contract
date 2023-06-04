@@ -19,7 +19,49 @@ contract NFTRY {
         bool rentalStopped;
     }
 
+    struct BorrowableNFT {
+        address nftAddress;
+        uint tokenId;
+        uint depositFee;
+        uint fixedFee;
+        uint usageFee;
+    }
+
+    struct BorrowedNFT {
+        address nftAddress;
+        uint tokenId;
+        uint depositFee;
+        uint fixedFee;
+        uint usageFee;
+        address borrowedFrom;
+        uint borrowedTime;
+    }
+
+    struct LentNFT {
+        address nftAddress;
+        uint tokenId;
+        uint depositFee;
+        uint fixedFee;
+        uint usageFee;
+        address borrowedBy;
+        uint borrowedTime;
+    }
+
+    // nft address & token id
     mapping(address => mapping(uint => Listing)) listings;
+
+    // nft address
+    mapping(address => uint[]) public allTokens;
+
+    // lender's address -> token ID[]
+    mapping(address => uint[]) public allLenders;
+    // lender's address & token ID -> nft address
+    mapping(address => mapping(uint => address)) public lenderToNftAddress;
+
+    // borrower's address -> token ID[]
+    mapping(address => uint[]) public allBorrowers;
+    // borrower's address & token ID -> nft address
+    mapping(address => mapping(uint => address)) public borrowerToNftAddress;
 
     event NftListed(
         address indexed nftAddress,
@@ -87,6 +129,11 @@ contract NFTRY {
         listing.fixedFee = fixedFee;
         listing.usageFee = usageFee;
 
+        allTokens[nftAddress].push(tokenId);
+
+        allLenders[msg.sender].push(tokenId);
+        lenderToNftAddress[msg.sender][tokenId] = nftAddress;
+
         emit NftListed(nftAddress, tokenId, msg.sender);
     }
 
@@ -105,6 +152,18 @@ contract NFTRY {
         claim(nftAddress, tokenId);
 
         resetListing(listing);
+
+        // Remove the tokenId from the lender's list.
+        uint[] storage lenderTokens = allLenders[msg.sender];
+        for (uint i = 0; i < lenderTokens.length; i++) {
+            if (lenderTokens[i] == tokenId) {
+                lenderTokens[i] = lenderTokens[lenderTokens.length - 1];
+                lenderTokens.pop();
+                break;
+            }
+        }
+
+        delete lenderToNftAddress[msg.sender][tokenId];
 
         emit NftDelisted(nftAddress, tokenId, msg.sender);
     }
@@ -209,6 +268,9 @@ contract NFTRY {
         listing.lastClaim = listing.borrowTime;
         listing.unclaimedFixedFees += listing.fixedFee;
 
+        allBorrowers[msg.sender].push(tokenId);
+        borrowerToNftAddress[msg.sender][tokenId] = nftAddress;
+
         emit NftBorrowed(nftAddress, tokenId, msg.sender);
     }
 
@@ -245,6 +307,111 @@ contract NFTRY {
         listing.borrowTime = 0;
         listing.lastClaim = 0;
 
+        uint[] storage borrowerTokens = allBorrowers[msg.sender];
+        for (uint i = 0; i < borrowerTokens.length; i++) {
+            if (borrowerTokens[i] == tokenId) {
+                borrowerTokens[i] = borrowerTokens[borrowerTokens.length - 1];
+                borrowerTokens.pop();
+                break;
+            }
+        }
+
+        delete borrowerToNftAddress[msg.sender][tokenId];
+
         emit NftReturned(nftAddress, tokenId, msg.sender);
+    }
+
+    // =============================================================
+    //                        View Functions
+    // =============================================================
+    function getAllBorrowableNFTListByContractAddress(
+        address nftAddress
+    ) public view returns (BorrowableNFT[] memory) {
+        BorrowableNFT[] memory borrowableNFTs = new BorrowableNFT[](
+            allTokens[nftAddress].length
+        );
+        uint count = 0;
+        for (uint i = 0; i < allTokens[nftAddress].length; i++) {
+            uint tokenId = allTokens[nftAddress][i];
+            if (!listings[nftAddress][tokenId].inUse) {
+                borrowableNFTs[count] = BorrowableNFT(
+                    nftAddress,
+                    tokenId,
+                    listings[nftAddress][tokenId].depositFee,
+                    listings[nftAddress][tokenId].fixedFee,
+                    listings[nftAddress][tokenId].usageFee
+                );
+                count++;
+            }
+        }
+
+        // to fit the count
+        BorrowableNFT[] memory result = new BorrowableNFT[](count);
+        for (uint i = 0; i < count; i++) {
+            result[i] = borrowableNFTs[i];
+        }
+        return result;
+    }
+
+    function getAllBorrowedNFTListByWalletAddress(
+        address borrower
+    ) public view returns (BorrowedNFT[] memory) {
+        BorrowedNFT[] memory borrowedNFTs = new BorrowedNFT[](
+            allBorrowers[borrower].length
+        );
+        uint count = 0;
+        for (uint i = 0; i < allBorrowers[borrower].length; i++) {
+            uint tokenId = allBorrowers[borrower][i];
+            address nftAddress = borrowerToNftAddress[borrower][tokenId];
+            Listing memory listing = listings[nftAddress][tokenId];
+            if (listing.inUse && listing.borrower == borrower) {
+                borrowedNFTs[count] = BorrowedNFT(
+                    nftAddress,
+                    tokenId,
+                    listing.depositFee,
+                    listing.fixedFee,
+                    listing.usageFee,
+                    listing.owner,
+                    listing.borrowTime
+                );
+                count++;
+            }
+        }
+        // to fit the count
+        BorrowedNFT[] memory result = new BorrowedNFT[](count);
+        for (uint i = 0; i < count; i++) {
+            result[i] = borrowedNFTs[i];
+        }
+        return result;
+    }
+
+    function getAllLentNFTListByWalletAddress(
+        address lender
+    ) public view returns (LentNFT[] memory) {
+        LentNFT[] memory lentNFTs = new LentNFT[](allLenders[lender].length);
+        uint count = 0;
+        for (uint i = 0; i < allLenders[lender].length; i++) {
+            uint tokenId = allLenders[lender][i];
+            address nftAddress = lenderToNftAddress[lender][tokenId];
+            Listing memory listing = listings[nftAddress][tokenId];
+            if (listing.inUse && listing.owner == lender) {
+                lentNFTs[count] = LentNFT(
+                    nftAddress,
+                    tokenId,
+                    listing.depositFee,
+                    listing.fixedFee,
+                    listing.usageFee,
+                    listing.borrower,
+                    listing.borrowTime
+                );
+                count++;
+            }
+        }
+        // Trim the array to fit the count
+        LentNFT[] memory result = new LentNFT[](count);
+        for (uint i = 0; i < count; i++) {
+            result[i] = lentNFTs[i];
+        }
+        return result;
     }
 }
