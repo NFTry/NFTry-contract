@@ -3,29 +3,37 @@ pragma solidity ^0.8.9;
 
 import "./IERC721A.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract Nftry is Ownable {
+contract NFTRY {
+    address USDC = 0x9758211252cE46EEe6d9685F2402B7DdcBb2466d; // Testnet Custom USDC
     struct Listing {
         address owner;
-        uint depositFee;
+        uint deposit;
         uint fixedFee;
-        uint usageFee;
-        bool inUse;
+        uint usageFee; // per hour
         address borrower;
         uint borrowTime;
         uint lastClaim;
+        uint unclaimedFixedFees;
+        uint unclaimedUsageFees;
+        bool rentalStopped;
     }
 
-    // nft address & token id
     mapping(address => mapping(uint => Listing)) listings;
-    mapping(address => mapping(uint => uint)) fixedFees;
 
-    // for testnet custom USDC: 0x9758211252cE46EEe6d9685F2402B7DdcBb2466d
-    address public paymentToken;
+    event NftListed(
+        address indexed nftAddress,
+        uint indexed tokenId,
+        address owner
+    );
 
-    event NftListed(address indexed nftAddress, uint tokenId, address owner);
     event NftDelisted(
+        address indexed nftAddress,
+        uint indexed tokenId,
+        address owner
+    );
+
+    event NftLiquidated(
         address indexed nftAddress,
         uint indexed tokenId,
         address owner
@@ -57,21 +65,13 @@ contract Nftry is Ownable {
         address borrower
     );
 
-    constructor(address _paymentToken) {
-        paymentToken = _paymentToken;
-    }
-
-    function setPaymentToken(address _paymentToken) external onlyOwner {
-        paymentToken = _paymentToken;
-    }
-
     // =============================================================
     //                        For NFT Lender
     // =============================================================
     function list(
         address nftAddress,
         uint tokenId,
-        uint depositFee,
+        uint deposit,
         uint fixedFee,
         uint usageFee
     ) external {
@@ -81,16 +81,11 @@ contract Nftry is Ownable {
         );
 
         IERC721A(nftAddress).transferFrom(msg.sender, address(this), tokenId);
-
         Listing storage listing = listings[nftAddress][tokenId];
-        listing.owner = msg.sender;
-        listing.depositFee = depositFee;
+        resetListing(listing);
+        listing.deposit = deposit;
         listing.fixedFee = fixedFee;
         listing.usageFee = usageFee;
-        listing.inUse = false;
-        listing.borrower = address(0);
-        listing.borrowTime = 0;
-        listing.lastClaim = 0;
 
         emit NftListed(nftAddress, tokenId, msg.sender);
     }
@@ -98,57 +93,98 @@ contract Nftry is Ownable {
     function delist(address nftAddress, uint tokenId) external {
         require(
             IERC721A(nftAddress).ownerOf(tokenId) == address(this),
-            "The NFT is not owned by the NFTry address"
+            "The NFT is not owned by the NFTRY address"
         );
 
         Listing storage listing = listings[nftAddress][tokenId];
-        require(!listing.inUse, "The NFT is already borrowed");
+        require(listing.borrower == address(0), "The NFT is already borrowed");
         require(listing.owner == msg.sender, "Only owner can delist");
 
         IERC721A(nftAddress).transferFrom(address(this), msg.sender, tokenId);
 
-        // reset listings
-        listing.owner = address(0);
-        listing.depositFee = 0;
-        listing.fixedFee = 0;
-        listing.usageFee = 0;
-        listing.inUse = false;
-        listing.borrower = address(0);
-        listing.borrowTime = 0;
-        listing.lastClaim = 0;
+        claim(nftAddress, tokenId);
 
-        // claim 안해간 fee 는 환불 X
+        resetListing(listing);
 
         emit NftDelisted(nftAddress, tokenId, msg.sender);
     }
 
-    function claimFixedFee(address nftAddress, uint tokenId) external {
-        Listing storage listing = listings[nftAddress][tokenId];
-        require(listing.owner == msg.sender, "Only Owner can claim");
-
-        uint fixedfees = fixedFees[nftAddress][tokenId];
-        require(fixedfees > 0, "Fixed Fees is 0");
-
-        ERC20(paymentToken).transfer(msg.sender, fixedfees);
-        fixedFees[nftAddress][tokenId] = 0;
-        emit FixedFeeClaimed(nftAddress, tokenId, msg.sender, fixedfees);
+    function resetListing(Listing storage listing) internal {
+        listing.owner = address(0);
+        listing.deposit = 0;
+        listing.fixedFee = 0;
+        listing.usageFee = 0;
+        listing.borrower = address(0);
+        listing.borrowTime = 0;
+        listing.lastClaim = 0;
+        listing.unclaimedFixedFees = 0;
+        listing.unclaimedUsageFees = 0;
+        listing.rentalStopped = false;
     }
 
-    function claimUsageFee(address nftAddress, uint tokenId) external {
+    function claim(address nftAddress, uint tokenId) public {
         Listing storage listing = listings[nftAddress][tokenId];
         require(listing.owner == msg.sender, "Only Owner can claim");
+        if (listing.unclaimedFixedFees > 0) claimFixedFee(nftAddress, tokenId);
+        claimUsageFee(nftAddress, tokenId);
+    }
 
-        uint elapsedHours = (block.timestamp - listing.lastClaim) / 1 hours;
-        uint totalUsageFees = elapsedHours * listing.usageFee;
+    function claimFixedFee(address nftAddress, uint tokenId) internal {
+        Listing storage listing = listings[nftAddress][tokenId];
+        ERC20(USDC).transfer(msg.sender, listing.unclaimedFixedFees);
+        emit FixedFeeClaimed(
+            nftAddress,
+            tokenId,
+            msg.sender,
+            listing.unclaimedFixedFees
+        );
+        listing.unclaimedFixedFees = 0;
+    }
 
-        totalUsageFees = totalUsageFees > listing.depositFee - listing.fixedFee
-            ? listing.depositFee - listing.fixedFee
-            : totalUsageFees;
+    function claimUsageFee(address nftAddress, uint tokenId) internal {
+        Listing storage listing = listings[nftAddress][tokenId];
+        if (listing.borrower != address(0)) {
+            uint unclaimedUsageFees = ((block.timestamp - listing.lastClaim) *
+                listing.usageFee) / 1 hours;
 
-        ERC20(paymentToken).transfer(msg.sender, totalUsageFees);
+            uint claimedUsageFees = ((listing.lastClaim - listing.borrowTime) *
+                listing.usageFee) / 1 hours;
 
-        listing.lastClaim = block.timestamp;
-        emit UsageFeeClaimed(nftAddress, tokenId, msg.sender, totalUsageFees);
+            uint maximalUsageFees = listing.deposit - listing.fixedFee;
+
+            if (maximalUsageFees > unclaimedUsageFees + claimedUsageFees) {
+                listing.unclaimedUsageFees += unclaimedUsageFees;
+                listing.lastClaim = block.timestamp;
+            } else {
+                // Liquidation
+                listing.unclaimedUsageFees +=
+                    listing.deposit -
+                    listing.fixedFee -
+                    claimedUsageFees;
+                emit NftLiquidated(nftAddress, tokenId, listing.owner);
+                // TODO : liquidation ; force to delist the NFT from NFTRY
+            }
+        }
+
+        if (listing.unclaimedUsageFees > 0) {
+            ERC20(USDC).transfer(msg.sender, listing.unclaimedUsageFees);
+            listing.unclaimedUsageFees = 0;
+            emit UsageFeeClaimed(
+                nftAddress,
+                tokenId,
+                msg.sender,
+                listing.unclaimedUsageFees
+            );
+        }
+    }
+
+    function stopOrResumeLending(address nftAddress, uint tokenId) external {
+        Listing storage listing = listings[nftAddress][tokenId];
+        require(
+            listing.owner == msg.sender,
+            "Only Owner can stop/resume lending"
+        );
+        listing.rentalStopped = !listing.rentalStopped;
     }
 
     // =============================================================
@@ -157,28 +193,21 @@ contract Nftry is Ownable {
     function borrow(address nftAddress, uint tokenId) external {
         Listing storage listing = listings[nftAddress][tokenId];
         require(listing.owner != address(0), "The NFT is not listed");
-        require(!listing.inUse, "The NFT is already borrowed");
+        require(listing.borrower == address(0), "The NFT is already borrowed");
         require(
             IERC721A(nftAddress).ownerOf(tokenId) == address(this),
-            "The NFT is not owned by the NFTry address"
+            "The NFT is not owned by the NFTRY address"
         );
+        require(!listing.rentalStopped, "The NFT is stopped to rent");
 
-        ERC20(paymentToken).transferFrom(
-            msg.sender,
-            address(this),
-            listing.depositFee
-        );
+        ERC20(USDC).transferFrom(msg.sender, address(this), listing.deposit);
 
         IERC721A(nftAddress).transferFrom(address(this), msg.sender, tokenId);
 
-        listing.inUse = true;
         listing.borrower = msg.sender;
         listing.borrowTime = block.timestamp;
         listing.lastClaim = listing.borrowTime;
-
-        fixedFees[nftAddress][tokenId] =
-            fixedFees[nftAddress][tokenId] +
-            listing.fixedFee;
+        listing.unclaimedFixedFees += listing.fixedFee;
 
         emit NftBorrowed(nftAddress, tokenId, msg.sender);
     }
@@ -192,23 +221,29 @@ contract Nftry is Ownable {
             "The NFT is not owned by the 'from' address"
         );
 
-        uint elapsedHours = (block.timestamp - listing.borrowTime) / 1 hours;
-        uint totalUsageFees = elapsedHours * listing.usageFee;
+        uint totalUsageFees = ((block.timestamp - listing.borrowTime) *
+            listing.usageFee) / 1 hours;
 
-        uint totalFee = totalUsageFees + listing.fixedFee > listing.depositFee
-            ? listing.depositFee
-            : totalUsageFees + listing.fixedFee;
+        require(
+            totalUsageFees + listing.fixedFee <= listing.deposit,
+            "You've used up your deposit so you can't return the NFT"
+        );
 
-        uint remainDeposit = listing.depositFee - totalFee;
+        uint claimedUsageFee = ((listing.lastClaim - listing.borrowTime) *
+            listing.usageFee) / 1 hours;
 
-        ERC20(paymentToken).transfer(msg.sender, remainDeposit);
+        listing.unclaimedUsageFees += totalUsageFees - claimedUsageFee;
+
+        ERC20(USDC).transfer(
+            msg.sender,
+            listing.deposit - listing.fixedFee - totalUsageFees
+        );
 
         IERC721A(nftAddress).transferFrom(msg.sender, address(this), tokenId);
 
-        // set listings
-        listing.inUse = false;
         listing.borrower = address(0);
         listing.borrowTime = 0;
+        listing.lastClaim = 0;
 
         emit NftReturned(nftAddress, tokenId, msg.sender);
     }
